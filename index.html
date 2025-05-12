@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Emotion Word Navigator</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box }
+    html, body { width:100%; height:100%; overflow:hidden; background:#111; color:#fff; font-family:-apple-system, BlinkMacSystemFont,'Segoe UI',sans-serif }
+
+    :root {
+      --gutter:600px;       /* 两侧面板到中心轴距离 */
+      --ctrl-w:300px;
+      --instr-w:220px;
+      --ind-w:80px;
+      --arrow-off:600px;    /* 箭头水平偏移 */
+      --indicator-down:300px; /* Indicator 和箭头下移的额外像素 */
+    }
+
+    /* 摄像头画面 */
+    #webcam-container {
+      position:fixed; top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      width:calc(80vh * 4/3); height:80vh; max-width:100vw;
+      background:#000; overflow:hidden; z-index:0;
+    }
+    @media(min-aspect-ratio:4/3) {
+      #webcam-container { width:80vw; height:calc(80vw * 3/4); }
+    }
+    #webcam-container canvas, #noise-overlay {
+      position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover;
+    }
+
+    /* 左侧设置面板 */
+    #controls {
+      position:absolute; top:20px;
+      left:calc(50% - var(--gutter) - var(--ctrl-w));
+      width:var(--ctrl-w); padding:16px; background:rgba(40,40,40,0.9);
+      border-radius:12px; box-shadow:0 4px 16px rgba(0,0,0,0.5); backdrop-filter:blur(8px);
+      z-index:20;
+    }
+
+    /* 右侧说明面板 */
+    #instructions {
+      position:absolute; top:20px;
+      left:calc(50% + var(--gutter));
+      width:var(--instr-w); padding:16px; background:rgba(40,40,40,0.9);
+      border-radius:12px; box-shadow:0 4px 16px rgba(0,0,0,0.5); backdrop-filter:blur(8px);
+      z-index:20;
+    }
+
+    /* 中心大字 */
+    #currentWord {
+      position:absolute; top:18%; left:50%; transform:translateX(-50%);
+      font-size:140px; font-weight:700; text-align:center;
+      padding:16px 32px; background:rgba(0,0,0,0.7); border-radius:12px;
+      z-index:20; pointer-events:none;
+      opacity:0; transition:opacity .4s;
+    }
+    #currentWord.visible { opacity:1; }
+
+    /* Look 指示器（下移 +300px） */
+    #indicator {
+      position:absolute; top:calc(200px + var(--indicator-down));
+      left:calc(50% + var(--gutter));
+      width:var(--ind-w); height:240px; background:rgba(40,40,40,0.8);
+      border-radius:12px; display:flex; flex-direction:column;
+      align-items:center; justify-content:space-around; padding:8px;
+      box-shadow:0 4px 16px rgba(0,0,0,0.5); z-index:20;
+    }
+    #indicator .state {
+      width:60px; height:60px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      font-size:24px; color:#fff; background:#333; transition:background .3s;
+    }
+    #indicator .active { background:#0a84ff; }
+
+    /* 箭头（下移 +300px） */
+    .arrow {
+      position:absolute; top:calc(75% + var(--indicator-down));
+      font-size:48px; color:rgba(255,255,255,0.8);
+      cursor:pointer; transition:transform .2s; z-index:20;
+    }
+    .arrow:hover { transform:scale(1.1); }
+    #arrowLeft  { left:calc(50% - var(--arrow-off)); }
+    #arrowRight { left:calc(50% + var(--arrow-off)); }
+
+    /* 顶部百分比状态 */
+    #status {
+      position:absolute; top:20px; left:50%; transform:translateX(-50%);
+      background:rgba(0,0,0,0.7); padding:8px 16px; border-radius:8px;
+      font-size:16px; box-shadow:0 4px 12px rgba(0,0,0,0.5); z-index:20;
+    }
+
+    /* 底部相册 */
+    #gallery {
+      position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+      width:80vw; max-width:960px; height:120px;
+      background:rgba(30,30,30,0.9); display:flex; align-items:center; gap:12px;
+      padding:12px; overflow-x:auto; overflow-y:hidden;
+      border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.6); z-index:20;
+    }
+    #gallery img { height:96px; border:2px solid #0a84ff; border-radius:6px; transition:transform .2s; cursor:pointer }
+    #gallery img:hover { transform:scale(1.05) }
+
+    /* Lightbox */
+    #lightbox {
+      position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+      width:60vw; max-width:800px; height:60vh; background:rgba(0,0,0,0.9);
+      display:none; align-items:center; justify-content:center; z-index:30;
+      border-radius:12px; overflow:hidden;
+    }
+    #lightbox img { max-width:100%; max-height:100%; object-fit:contain }
+    #lightbox .close { position:absolute; top:10px; right:10px; font-size:24px; color:#fff; cursor:pointer }
+
+    /* 控件样式 */
+    #controls h3 { font-size:18px; margin-bottom:12px }
+    #controls label { display:block; margin-top:16px; font-size:14px; color:#ccc }
+    .slider { width:100%; margin-top:8px; height:6px; border-radius:3px; background:#555; outline:none }
+    .slider::-webkit-slider-thumb { width:16px; height:16px; border-radius:50%; background:#0a84ff; }
+    .dropdown { position:relative; margin-top:8px }
+    .dropdown select { width:100%; padding:8px 12px; background:#2a2a2a; color:#eee; border:none; border-radius:6px }
+    .toggle { display:flex; align-items:center; margin-top:12px }
+    .toggle input { margin-right:8px; accent-color:#0a84ff }
+    #controls button { margin-top:24px; width:100%; padding:12px; background:#0a84ff; border:none; border-radius:8px; color:#fff; cursor:pointer }
+    #controls button:hover { background:#398bff }
+
+    #instructions h4 { margin-bottom:8px; font-size:16px }
+    #instructions p { margin:4px 0; font-size:14px; line-height:1.4 }
+  </style>
+</head>
+<body>
+
+  <div id="controls">
+    <h3>Point Effect Settings</h3>
+    <label>Density: <span id="lblDensity">3</span></label>
+    <input id="sldDensity" class="slider" type="range" min="2" max="15" value="3">
+    <label>Scale: <span id="lblScale">1.3</span>x</label>
+    <input id="sldScale" class="slider" type="range" min="0.5" max="3" step="0.1" value="1.3">
+    <label>Primary Hue</label>
+    <input id="sldHue1" class="slider" type="range" min="0" max="360" value="200">
+    <label>Secondary Hue</label>
+    <input id="sldHue2" class="slider" type="range" min="0" max="360" value="340">
+    <label>Brightness: <span id="lblBright">1.0</span>x</label>
+    <input id="sldBright" class="slider" type="range" min="0.2" max="2" step="0.1" value="1.0">
+    <label>Contrast: <span id="lblContrast">1.0</span>x</label>
+    <input id="sldContrast" class="slider" type="range" min="0.2" max="2" step="0.1" value="1.0">
+    <label>Shape:</label>
+    <div class="dropdown">
+      <select id="selShape">
+        <option value="circle">Circle</option>
+        <option value="square">Square</option>
+        <option value="triangle">Triangle</option>
+      </select>
+    </div>
+    <div class="toggle"><input type="checkbox" id="tglInvert"><label for="tglInvert">Invert Colors</label></div>
+    <div class="toggle"><input type="checkbox" id="tglNoise"><label for="tglNoise">Add Noise</label></div>
+    <button id="snapBtn" disabled>Snap</button>
+  </div>
+
+  <div id="instructions">
+    <h4>Instructions</h4>
+    <p>Look up for 1s to move positive ↑</p>
+    <p>Look down for 1s to move negative ↓</p>
+    <p>← / → or arrows to switch theme</p>
+    <p>Click “Snap” to capture</p>
+  </div>
+
+  <div id="status">Loading model…</div>
+  <div id="currentWord">Loading…</div>
+  <div id="indicator">
+    <div id="indUp" class="state">↑</div>
+    <div id="indStraight" class="state active">→</div>
+    <div id="indDown" class="state">↓</div>
+  </div>
+  <div id="arrowLeft" class="arrow">◀</div>
+  <div id="arrowRight" class="arrow">▶</div>
+
+  <video id="videoElement" autoplay playsinline style="display:none"></video>
+  <div id="webcam-container"></div>
+  <div id="gallery"></div>
+  <div id="lightbox"><span class="close">✕</span><img/></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+  <script>
+    const groups = [
+      ["Despair","Hopeless","Sad","Uncertain","Neutral","Calm","Content","Happy","Joyful","Elated","Ecstatic"],
+      ["Weak","Timid","Unsure","Cautious","Balanced","Resolute","Bold","Brave","Fearless","Heroic","Legendary"],
+      ["Apathetic","Indifferent","Reserved","Observant","Engaged","Interested","Passionate","Enthusiastic","Zealous","Frenzied","Maniacal"],
+      ["Lazy","Tired","Unmotivated","Routine","Productive","Driven","Ambitious","Relentless","Unstoppable","Dominant","Supreme"],
+      ["Doubtful","Skeptical","Questioning","Inquiring","Open","Receptive","Creative","Innovative","Visionary","Revolutionary","Transcendent"],
+      ["Cold","Detached","Reserved","Friendly","Warm","Compassionate","Empathetic","Caring","Devoted","Loving","Sacred"],
+      ["Stressed","Anxious","Nervous","Alert","Relaxed","Serene","Peaceful","Tranquil","Blissful","Paradisiac","Euphoric"],
+      ["Afraid","Worried","Concerned","Aware","Assured","Confident","Valiant","Gallant","Noble","Majestic","Godlike"],
+      ["Uncertain","Hesitant","Wavering","Steady","Stable","Decisive","Determined","Committed","Unyielding","Masterful","Supreme"],
+      ["Calm","Collected","Rational","Insightful","Inspired","Imaginative","Inventive","Genius","Prodigious","Mythic","Divine"]
+    ];
+    let gi=0, wi=5;
+    const curEl=document.getElementById("currentWord"),
+          iu=document.getElementById("indUp"),
+          is=document.getElementById("indStraight"),
+          id=document.getElementById("indDown"),
+          stat=document.getElementById("status");
+    function updateWord(){
+      curEl.classList.remove("visible");
+      setTimeout(()=>{
+        curEl.textContent=groups[gi][wi];
+        curEl.classList.add("visible");
+      },50);
+    }
+    function resetInd(){
+      iu.classList.remove("active");
+      is.classList.remove("active");
+      id.classList.remove("active");
+    }
+    document.getElementById("arrowLeft").onclick=_=>{
+      gi=(gi+groups.length-1)%groups.length; wi=5; updateWord();
+    };
+    document.getElementById("arrowRight").onclick=_=>{
+      gi=(gi+1)%groups.length; wi=5; updateWord();
+    };
+    document.addEventListener("keydown",e=>{
+      if(e.key==="ArrowLeft") document.getElementById("arrowLeft").click();
+      if(e.key==="ArrowRight") document.getElementById("arrowRight").click();
+    });
+    let us=null, ds=null, TH=1000;
+    function track(dir,p){
+      resetInd();
+      if(dir==="Look Up"&&p>0.8){
+        iu.classList.add("active");
+        if(!us) us=performance.now();
+        if(performance.now()-us>TH&&wi<10){ wi++; updateWord(); us=performance.now(); }
+        ds=null;
+      } else if(dir==="Look Down"&&p>0.8){
+        id.classList.add("active");
+        if(!ds) ds=performance.now();
+        if(performance.now()-ds>TH&&wi>0){ wi--; updateWord(); ds=performance.now(); }
+        us=null;
+      } else {
+        is.classList.add("active");
+        us=ds=null;
+      }
+    }
+
+    const OW=640, OH=480;
+    let density=3, scaleF=1.3, hue1=200, hue2=340, shape='circle';
+    const video=document.getElementById("videoElement"),
+          container=document.getElementById("webcam-container"),
+          snapBtn=document.getElementById("snapBtn"),
+          gallery=document.getElementById("gallery"),
+          lightbox=document.getElementById("lightbox"),
+          lbImg=lightbox.querySelector("img"),
+          lbClose=lightbox.querySelector(".close");
+    const canvas=document.createElement("canvas");
+    canvas.width=OW; canvas.height=OH;
+    const ctx=canvas.getContext("2d"); container.appendChild(canvas);
+    const noise=document.createElement("canvas");
+    noise.id="noise-overlay"; noise.width=OW; noise.height=OH;
+    const nctx=noise.getContext("2d"), nd=nctx.createImageData(OW,OH);
+    for(let i=0;i<nd.data.length;i+=4){
+      let v=Math.random()*255;
+      nd.data[i]=nd.data[i+1]=nd.data[i+2]=v; nd.data[i+3]=30;
+    }
+    nctx.putImageData(nd,0,0); noise.style.display="none"; container.appendChild(noise);
+    const off=document.createElement("canvas"); off.width=OW; off.height=OH;
+    const offCtx=off.getContext("2d");
+
+    function updateFilters(){
+      const b=document.getElementById("sldBright").value,
+            c=document.getElementById("sldContrast").value,
+            inv=document.getElementById("tglInvert").checked?"invert(1)":"";
+      canvas.style.filter=`brightness(${b}) contrast(${c}) ${inv}`;
+      document.getElementById("lblBright").textContent=(+b).toFixed(1);
+      document.getElementById("lblContrast").textContent=(+c).toFixed(1);
+    }
+    ["sldBright","sldContrast","tglInvert"].forEach(id=>
+      document.getElementById(id).oninput=updateFilters
+    );
+    document.getElementById("tglNoise").onchange=e=>
+      noise.style.display=e.target.checked?"block":"none";
+    document.getElementById("sldDensity").oninput=e=>{
+      density=+e.target.value; document.getElementById("lblDensity").textContent=density;
+    };
+    document.getElementById("sldScale").oninput=e=>{
+      scaleF=+e.target.value; document.getElementById("lblScale").textContent=scaleF.toFixed(1);
+    };
+    document.getElementById("sldHue1").oninput=e=>hue1=+e.target.value;
+    document.getElementById("sldHue2").oninput=e=>hue2=+e.target.value;
+    document.getElementById("selShape").onchange=e=>shape=e.target.value;
+
+    navigator.mediaDevices.getUserMedia({video:true})
+      .then(s=>{ video.srcObject=s; initModel(); })
+      .catch(()=>stat.textContent="Camera error");
+    async function initModel(){
+      stat.textContent="Loading model…";
+      const model=await tmImage.load(
+        "https://teachablemachine.withgoogle.com/models/ftIQD4G5P/model.json",
+        "https://teachablemachine.withgoogle.com/models/ftIQD4G5P/metadata.json"
+      );
+      stat.textContent="Running…"; snapBtn.disabled=false;
+      updateWord(); updateFilters();
+      predictLoop(model); renderLoop();
+    }
+    async function predictLoop(m){
+      const preds=await m.predict(video);
+      const b=preds.reduce((a,b)=>a.probability>b.probability?a:b);
+      stat.textContent=`${b.className}: ${(b.probability*100).toFixed(1)}%`;
+      track(b.className,b.probability);
+      setTimeout(()=>predictLoop(m),200);
+    }
+    function renderLoop(){
+      offCtx.drawImage(video,0,0,OW,OH);
+      const data=offCtx.getImageData(0,0,OW,OH).data;
+      ctx.clearRect(0,0,OW,OH);
+      for(let y=0;y<OH;y+=density)for(let x=0;x<OW;x+=density){
+        const i=4*(x+y*OW),r=data[i],g=data[i+1],b=data[i+2];
+        const v=(r+g+b)/3,sz=(v/255)*density*scaleF;
+        const hue=x<OW/2?hue1:hue2;
+        ctx.fillStyle=`hsl(${hue},100%,${(v/255)*50}%)`;
+        if(shape==="square") ctx.fillRect(x-sz/2,y-sz/2,sz,sz);
+        else if(shape==="triangle"){
+          ctx.beginPath();ctx.moveTo(x,y-sz/2);
+          ctx.lineTo(x-sz/2,y+sz/2);ctx.lineTo(x+sz/2,y+sz/2);
+          ctx.closePath();ctx.fill();
+        } else { ctx.beginPath();ctx.arc(x,y,sz/2,0,2*Math.PI);ctx.fill(); }
+      }
+      requestAnimationFrame(renderLoop);
+    }
+    snapBtn.onclick=()=>{
+      const tmp=document.createElement("canvas");
+      tmp.width=OW; tmp.height=OH;
+      const tctx=tmp.getContext("2d");
+      tctx.drawImage(canvas,0,0);
+      tctx.font="48px sans-serif";tctx.fillStyle="rgba(0,0,0,0.7)";
+      const txt=curEl.textContent,w=tctx.measureText(txt).width;
+      tctx.fillRect(20,20,w+20,64);tctx.fillStyle="#fff";tctx.fillText(txt,30,68);
+      const img=new Image();img.src=tmp.toDataURL();
+      gallery.appendChild(img);gallery.scrollLeft=gallery.scrollWidth;
+      img.onclick=()=>{ lbImg.src=img.src; lightbox.style.display="flex"; };
+    };
+    lbClose.onclick=_=>lightbox.style.display="none";
+    window.onkeydown=e=>{ if(e.key==="Escape") lightbox.style.display="none"; };
+  </script>
+</body>
+</html>
